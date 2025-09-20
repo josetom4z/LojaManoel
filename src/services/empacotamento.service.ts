@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Pedido, Produto, Dimensoes } from '../interfaces';
+import { Pedido, Produto, Dimensoes } from 'src/interfaces';
 import { CAIXAS_DISPONIVEIS } from '../constants/caixas.constants';
 
 interface CaixaUsada {
@@ -15,12 +15,101 @@ export class EmpacotamentoService {
   processarPedidos(pedidos: Pedido[]) {
     return pedidos.map(pedido => this.processarPedido(pedido));
   }
-
+  
   private processarPedido(pedido: Pedido) {
+    
+    const resultadoCompleto = this.tentarEmpacotamentoCompleto(pedido.produtos);
+    
+    if (resultadoCompleto.sucesso) {
+      return {
+        pedido_id: pedido.pedido_id,
+        caixas: [resultadoCompleto.caixa]
+      };
+    }    
+   
+    return this.empacotamentoComDivisao(pedido.produtos, pedido.pedido_id);
+  }
+
+  
+  private tentarEmpacotamentoCompleto(produtos: Produto[]): { sucesso: boolean; caixa?: any } {    
+    const caixasOrdenadas = [...this.caixas].sort((a, b) => {
+      const volumeA = a.dimensoes.altura * a.dimensoes.largura * a.dimensoes.comprimento;
+      const volumeB = b.dimensoes.altura * b.dimensoes.largura * b.dimensoes.comprimento;
+      return volumeA - volumeB;
+    });
+
+    for (const caixa of caixasOrdenadas) {
+      const resultado = this.tentarColocarTodosProdutos(produtos, caixa);
+      if (resultado.sucesso) {
+        return {
+          sucesso: true,
+          caixa: {
+            caixa_id: caixa.id,
+            produtos: produtos.map(p => p.produto_id)
+          }
+        };
+      }
+    }
+
+    return { sucesso: false };
+  }
+
+
+  private tentarColocarTodosProdutos(produtos: Produto[], caixa: any): { sucesso: boolean } {    
+    for (const produto of produtos) {
+      if (!this.produtoCabeNaCaixa(produto.dimensoes, caixa.dimensoes)) {
+        return { sucesso: false };
+      }
+    }
+    
+    const volumeTotalProdutos = produtos.reduce((total, produto) => {
+      return total + (produto.dimensoes.altura * produto.dimensoes.largura * produto.dimensoes.comprimento);
+    }, 0);
+
+    const volumeCaixa = caixa.dimensoes.altura * caixa.dimensoes.largura * caixa.dimensoes.comprimento;
+
+    
+    if (volumeTotalProdutos > volumeCaixa * 0.8) {
+      return { sucesso: false };
+    }
+
+    
+    return this.verificarBinPacking(produtos, caixa.dimensoes);
+  }
+
+  
+  private verificarBinPacking(produtos: Produto[], dimensoesCaixa: Dimensoes): { sucesso: boolean } {
+    
+    const produtosOrdenados = [...produtos].sort((a, b) => {
+      const volumeA = a.dimensoes.altura * a.dimensoes.largura * a.dimensoes.comprimento;
+      const volumeB = b.dimensoes.altura * b.dimensoes.largura * b.dimensoes.comprimento;
+      return volumeB - volumeA;
+    });
+
+    
+    const volumeTotal = produtosOrdenados.reduce((total, produto) => {
+      return total + (produto.dimensoes.altura * produto.dimensoes.largura * produto.dimensoes.comprimento);
+    }, 0);
+
+    const volumeCaixa = dimensoesCaixa.altura * dimensoesCaixa.largura * dimensoesCaixa.comprimento;    
+    
+    const limite = dimensoesCaixa.altura <= 35 ? 0.4 : 0.7;
+    
+    return { sucesso: volumeTotal <= volumeCaixa * limite };
+  }
+
+  
+  private empacotamentoComDivisao(produtos: Produto[], pedidoId: number) {
     const caixasUsadas: CaixaUsada[] = [];
     const produtosNaoEmpacotados: Produto[] = [];
+    
+    const produtosOrdenados = [...produtos].sort((a, b) => {
+      const volumeA = a.dimensoes.altura * a.dimensoes.largura * a.dimensoes.comprimento;
+      const volumeB = b.dimensoes.altura * b.dimensoes.largura * b.dimensoes.comprimento;
+      return volumeB - volumeA;
+    });
 
-    for (const produto of pedido.produtos) {
+    for (const produto of produtosOrdenados) {
       const caixaEncontrada = this.encontrarCaixaParaProduto(produto, caixasUsadas);
       
       if (caixaEncontrada) {
@@ -41,7 +130,7 @@ export class EmpacotamentoService {
       }
     }
 
-    return this.formatarResultado(pedido.pedido_id, caixasUsadas, produtosNaoEmpacotados);
+    return this.formatarResultado(pedidoId, caixasUsadas, produtosNaoEmpacotados);
   }
 
   private encontrarCaixaParaProduto(produto: Produto, caixasUsadas: CaixaUsada[]): CaixaUsada | null {
